@@ -73,8 +73,9 @@ int ParseHeader(const ConnectionPtr& conn, InternalInflightHttpRequestPtr& infli
   }
 
   // 2: convert phr_parse_request result to HttpRequest
-  size_t queue_capacity = max_packet_size - parsed_bytes;
-  auto req = std::make_shared<http::Request>(queue_capacity, inflight_request->is_blocking);
+  max_packet_size -= parsed_bytes;
+  auto req = std::make_shared<http::Request>(
+      conn->GetRecvBufferSize() > 0 ? conn->GetRecvBufferSize() : max_packet_size, inflight_request->is_blocking);
   std::optional<size_t> content_length;
   bool is_chunked = false;
 
@@ -87,7 +88,7 @@ int ParseHeader(const ConnectionPtr& conn, InternalInflightHttpRequestPtr& infli
                strncasecmp(header.name, http::kHeaderContentLength, http::kHeaderContentLengthLen) == 0) {
       content_length = http::ParseContentLength(header.value, header.value_len);
       if (!content_length ||  // invalid Content-Length value
-          (!inflight_request->is_blocking && content_length.value() > queue_capacity)) {  // rpc request too large
+          (!inflight_request->is_blocking && content_length.value() > max_packet_size)) {  // rpc request too large
         return kParserError;
       }
     }
@@ -107,7 +108,7 @@ int ParseHeader(const ConnectionPtr& conn, InternalInflightHttpRequestPtr& infli
   inflight_request->request = std::move(req);
   inflight_request->expect_content_bytes = content_length.value_or(0);
   inflight_request->max_body_size =
-      is_chunked ? queue_capacity : std::min(queue_capacity, inflight_request->expect_content_bytes);
+      is_chunked ? max_packet_size : std::min(max_packet_size, inflight_request->expect_content_bytes);
   inflight_request->request->SetMaxBodySize(inflight_request->max_body_size);
   inflight_request->new_request = true;
   inflight_request->is_chunked = is_chunked;
